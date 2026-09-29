@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>収支・給料管理アプリ</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue.js 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <!-- Supabase JS -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    [v-cloak] { display: none; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 min-h-screen pb-20">
+
+  <div id="app" v-cloak class="max-w-md mx-auto bg-white min-h-screen shadow-md flex flex-col">
+    
+    <!-- ヘッダー -->
+    <header class="bg-indigo-600 text-white p-4 sticky top-0 z-10 flex justify-between items-center shadow">
+      <h1 class="text-lg font-bold">収支＆給料マネージャー</h1>
+      <span class="text-xs bg-indigo-700 px-2 py-1 rounded">{{ currentYear }}年</span>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="flex-1 p-4 overflow-y-auto">
+
+      <!-- タブ 1: ダッシュボード（年間集計 & 控除） -->
+      <section v-if="currentTab === 'dashboard'" class="space-y-4">
+        <!-- 年間サマリーカード -->
+        <div class="bg-indigo-50 p-4 rounded-xl border border-indigo-100 shadow-sm">
+          <h2 class="text-xs font-bold text-indigo-600 tracking-wider uppercase mb-2">{{ currentYear }}年 年間集計</h2>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="bg-white p-2 rounded-lg shadow-sm">
+              <p class="text-xs text-gray-500">年収入</p>
+              <p class="font-bold text-emerald-600 text-sm">¥{{ formatNum(annualIncome) }}</p>
+            </div>
+            <div class="bg-white p-2 rounded-lg shadow-sm">
+              <p class="text-xs text-gray-500">年支出</p>
+              <p class="font-bold text-rose-500 text-sm">¥{{ formatNum(annualExpense) }}</p>
+            </div>
+            <div class="bg-white p-2 rounded-lg shadow-sm">
+              <p class="text-xs text-gray-500">差額合計</p>
+              <p class="font-bold text-indigo-600 text-sm">¥{{ formatNum(annualIncome - annualExpense) }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 控除メーター（103万 / 130万の壁） -->
+        <div class="bg-white p-4 rounded-xl border shadow-sm space-y-3">
+          <h3 class="text-sm font-bold text-gray-700 flex items-center gap-1">
+            <i data-lucide="shield-alert" class="w-4 h-4 text-amber-500"></i> 控除・年収上限メーター
+          </h3>
+          
+          <!-- 103万円の壁 -->
+          <div>
+            <div class="flex justify-between text-xs mb-1">
+              <span>103万円の壁（非課税目安）</span>
+              <span class="font-bold">{{ (annualIncome / 1030000 * 100).toFixed(1) }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 h-2.5 rounded-full overflow-hidden">
+              <div class="bg-amber-500 h-2.5 rounded-full" :style="{ width: Math.min(100, (annualIncome / 1030000 * 100)) + '%' }"></div>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+              残り上限: <span class="font-semibold text-gray-700">¥{{ formatNum(Math.max(0, 1030000 - annualIncome)) }}</span>
+              （目安 残り <span class="font-bold text-indigo-600">{{ (Math.max(0, 1030000 - annualIncome) / 1290).toFixed(1) }}</span> 時間 @1,290円）
+            </p>
+          </div>
+
+          <!-- 130万円の壁 -->
+          <div class="pt-2 border-t">
+            <div class="flex justify-between text-xs mb-1">
+              <span>130万円の壁（社会保険目安）</span>
+              <span class="font-bold">{{ (annualIncome / 1300000 * 100).toFixed(1) }}%</span>
+            </div>
+            <div class="w-full bg-gray-200 h-2.5 rounded-full overflow-hidden">
+              <div class="bg-rose-500 h-2.5 rounded-full" :style="{ width: Math.min(100, (annualIncome / 1300000 * 100)) + '%' }"></div>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+              残り上限: <span class="font-semibold text-gray-700">¥{{ formatNum(Math.max(0, 1300000 - annualIncome)) }}</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- 月別内訳リスト -->
+        <div class="bg-white p-4 rounded-xl border shadow-sm">
+          <h3 class="text-sm font-bold text-gray-700 mb-3">収入源別内訳 ({{ currentYear }}年)</h3>
+          <div v-if="Object.keys(incomeBySource).length === 0" class="text-xs text-gray-400 py-2 text-center">データがありません</div>
+          <div v-else class="space-y-2">
+            <div v-for="(amount, source) in incomeBySource" :key="source" class="flex justify-between items-center text-xs py-1.5 border-b last:border-0">
+              <span class="font-medium text-gray-600">{{ source }}</span>
+              <span class="font-bold text-gray-800">¥{{ formatNum(amount) }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- タブ 2: シフト・給料計算 -->
+      <section v-if="currentTab === 'shift'" class="space-y-4">
+        <form @submit.prevent="saveShift" class="bg-white p-4 rounded-xl border shadow-sm space-y-3">
+          <h2 class="text-sm font-bold text-gray-700 border-b pb-2">シフト・給料入力</h2>
+          
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">日付</label>
+            <input type="date" v-model="shiftForm.date" required class="w-full border rounded-lg p-2 text-sm">
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">勤務先 / 収入源</label>
+            <select v-model="shiftForm.source" class="w-full border rounded-lg p-2 text-sm bg-white">
+              <option v-for="s in sourceOptions" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">時給 (円)</label>
+            <div class="flex gap-2">
+              <input type="number" v-model.number="shiftForm.hourly_rate" required class="flex-1 border rounded-lg p-2 text-sm">
+              <button type="button" @click="shiftForm.hourly_rate = 1290" class="text-xs bg-gray-100 hover:bg-gray-200 px-2 rounded">1,290</button>
+              <button type="button" @click="shiftForm.hourly_rate = 1612.5" class="text-xs bg-gray-100 hover:bg-gray-200 px-2 rounded">1,612.5</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">時間</label>
+              <input type="number" v-model.number="shiftForm.hours" min="0" required class="w-full border rounded-lg p-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">分</label>
+              <input type="number" v-model.number="shiftForm.minutes" min="0" max="59" required class="w-full border rounded-lg p-2 text-sm">
+            </div>
+          </div>
+
+          <div class="bg-indigo-50 p-3 rounded-lg text-center my-2">
+            <span class="text-xs text-indigo-600 block">見込み給料</span>
+            <span class="text-xl font-bold text-indigo-700">¥{{ formatNum(calculatedEarnings) }}</span>
+          </div>
+
+          <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-sm shadow">
+            給料データとして保存
+          </button>
+        </form>
+
+        <!-- 履歴 -->
+        <div class="bg-white p-4 rounded-xl border shadow-sm">
+          <h3 class="text-sm font-bold text-gray-700 mb-2">最近のシフト履歴</h3>
+          <div class="space-y-2 max-h-60 overflow-y-auto">
+            <div v-for="item in shifts" :key="item.id" class="flex justify-between items-center text-xs p-2 bg-gray-50 rounded border">
+              <div>
+                <p class="font-bold text-gray-700">{{ item.date }} | {{ item.source }}</p>
+                <p class="text-gray-500">{{ item.hours }}時間{{ item.minutes }}分 (@¥{{ item.hourly_rate }})</p>
+              </div>
+              <div class="text-right">
+                <p class="font-bold text-emerald-600">¥{{ formatNum(item.earnings) }}</p>
+                <button @click="deleteShift(item.id)" class="text-rose-500 text-[10px]">削除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- タブ 3: 収支入力（家計簿） -->
+      <section v-if="currentTab === 'transaction'" class="space-y-4">
+        <form @submit.prevent="saveTransaction" class="bg-white p-4 rounded-xl border shadow-sm space-y-3">
+          <h2 class="text-sm font-bold text-gray-700 border-b pb-2">収支（家計簿）入力</h2>
+          
+          <div class="flex gap-2 p-1 bg-gray-100 rounded-lg">
+            <button type="button" @click="txForm.type = 'expense'" :class="txForm.type === 'expense' ? 'bg-rose-500 text-white' : 'text-gray-600'" class="flex-1 py-1.5 text-xs font-bold rounded-md transition">支出</button>
+            <button type="button" @click="txForm.type = 'income'" :class="txForm.type === 'income' ? 'bg-emerald-500 text-white' : 'text-gray-600'" class="flex-1 py-1.5 text-xs font-bold rounded-md transition">収入</button>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">日付</label>
+            <input type="date" v-model="txForm.date" required class="w-full border rounded-lg p-2 text-sm">
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">カテゴリ</label>
+            <select v-model="txForm.category" class="w-full border rounded-lg p-2 text-sm bg-white">
+              <option v-for="c in (txForm.type === 'expense' ? expenseCategories : incomeCategories)" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">金額 (円)</label>
+            <input type="number" v-model.number="txForm.amount" min="1" required class="w-full border rounded-lg p-2 text-sm">
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">メモ (任意)</label>
+            <input type="text" v-model="txForm.memo" placeholder="詳細など" class="w-full border rounded-lg p-2 text-sm">
+          </div>
+
+          <button type="submit" :class="txForm.type === 'expense' ? 'bg-rose-500 hover:bg-rose-600' : 'bg-emerald-500 hover:bg-emerald-600'" class="w-full text-white font-bold py-2.5 rounded-lg text-sm shadow">
+            {{ txForm.type === 'expense' ? '支出を記録' : '収入を記録' }}
+          </button>
+        </form>
+
+        <!-- 履歴 -->
+        <div class="bg-white p-4 rounded-xl border shadow-sm">
+          <h3 class="text-sm font-bold text-gray-700 mb-2">最近の収支履歴</h3>
+          <div class="space-y-2 max-h-60 overflow-y-auto">
+            <div v-for="item in transactions" :key="item.id" class="flex justify-between items-center text-xs p-2 bg-gray-50 rounded border">
+              <div>
+                <p class="font-bold text-gray-700">{{ item.date }} | {{ item.category }}</p>
+                <p class="text-gray-400 text-[10px]">{{ item.memo || 'メモなし' }}</p>
+              </div>
+              <div class="text-right">
+                <p :class="item.type === 'expense' ? 'text-rose-500' : 'text-emerald-600'" class="font-bold">
+                  {{ item.type === 'expense' ? '-' : '+' }}¥{{ formatNum(item.amount) }}
+                </p>
+                <button @click="deleteTransaction(item.id)" class="text-gray-400 text-[10px]">削除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- フッターナビゲーション -->
+    <nav class="bg-white border-t fixed bottom-0 left-0 right-0 max-w-md mx-auto flex justify-around p-2 z-10">
+      <button @click="currentTab = 'dashboard'" :class="currentTab === 'dashboard' ? 'text-indigo-600' : 'text-gray-400'" class="flex flex-col items-center gap-1 text-[10px] font-bold">
+        <i data-lucide="layout-dashboard" class="w-5 h-5"></i> 集計・控除
+      </button>
+      <button @click="currentTab = 'shift'" :class="currentTab === 'shift' ? 'text-indigo-600' : 'text-gray-400'" class="flex flex-col items-center gap-1 text-[10px] font-bold">
+        <i data-lucide="clock" class="w-5 h-5"></i> シフト入力
+      </button>
+      <button @click="currentTab = 'transaction'" :class="currentTab === 'transaction' ? 'text-indigo-600' : 'text-gray-400'" class="flex flex-col items-center gap-1 text-[10px] font-bold">
+        <i data-lucide="wallet" class="w-5 h-5"></i> 収支入力
+      </button>
+    </nav>
+
+  </div>
+
+  <script>
+    // Supabase初期設定（発行されたURL・キーをセット済み）
+    const SUPABASE_URL = 'https://yfgwqcxshpzfuwckbhbx.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlmZ3dxY3hzaHB6ZnV3Y2tiaGJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2NTAzOTMsImV4cCI6MjEwNjIyNjM5M30.nLduPdSRxGT-8cKqA6lOHHGCFcvVBzLvaCxCjKt4xdw';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    const { createApp, ref, computed, onMounted, updated } = Vue;
+
+    createApp({
+      setup() {
+        const currentTab = ref('dashboard');
+        const currentYear = ref(new Date().getFullYear());
+
+        const shifts = ref([]);
+        const transactions = ref([]);
+
+        // カテゴリ・バイト先選択肢
+        const sourceOptions = ['ケンタ', 'タイミー', 'シェアフル', 'ホテル', '親方', '近大', 'コベキャン', 'その他'];
+        const expenseCategories = ['ご飯', '嗜好品(食)', '嗜好品(他)', '飲み物', 'ICチャージ', '生協チャージ', '交通費', 'もやし', '企画費用', '打ち上げ', 'おそろ', '後輩と', 'あそび', 'グラコン', '旅費', '必要経費', 'その他'];
+        const incomeCategories = ['ケンタ', 'タイミー', 'シェアフル', 'ホテル', '親方', '近大', 'コベキャン', '臨時収入', 'その他'];
+
+        // フォーム状態
+        const shiftForm = ref({
+          date: new Date().toISOString().substr(0, 10),
+          source: 'ケンタ',
+          hourly_rate: 1290,
+          hours: 5,
+          minutes: 0
+        });
+
+        const txForm = ref({
+          type: 'expense',
+          date: new Date().toISOString().substr(0, 10),
+          category: 'ご飯',
+          amount: 1000,
+          memo: ''
+        });
+
+        // リアルタイム計算
+        const calculatedEarnings = computed(() => {
+          const hours = shiftForm.value.hours || 0;
+          const minutes = shiftForm.value.minutes || 0;
+          const rate = shiftForm.value.hourly_rate || 0;
+          return Math.round((hours + minutes / 60) * rate);
+        });
+
+        // 年間集計
+        const annualIncome = computed(() => {
+          const shiftSum = shifts.value.reduce((acc, cur) => acc + Number(cur.earnings), 0);
+          const txSum = transactions.value.filter(t => t.type === 'income').reduce((acc, cur) => acc + Number(cur.amount), 0);
+          return shiftSum + txSum;
+        });
+
+        const annualExpense = computed(() => {
+          return transactions.value.filter(t => t.type === 'expense').reduce((acc, cur) => acc + Number(cur.amount), 0);
+        });
+
+        // 収入源別集計
+        const incomeBySource = computed(() => {
+          const map = {};
+          shifts.value.forEach(s => {
+            map[s.source] = (map[s.source] || 0) + Number(s.earnings);
+          });
+          transactions.value.filter(t => t.type === 'income').forEach(t => {
+            map[t.category] = (map[t.category] || 0) + Number(t.amount);
+          });
+          return map;
+        });
+
+        // データ取得
+        const fetchData = async () => {
+          const { data: sData } = await supabase.from('shifts').select('*').order('date', { ascending: false });
+          const { data: tData } = await supabase.from('transactions').select('*').order('date', { ascending: false });
+          shifts.value = sData || [];
+          transactions.value = tData || [];
+        };
+
+        // シフト保存
+        const saveShift = async () => {
+          const payload = {
+            ...shiftForm.value,
+            earnings: calculatedEarnings.value
+          };
+          await supabase.from('shifts').insert([payload]);
+          
+          // シフト記録時に自動で収入トランザクションにも反映
+          await supabase.from('transactions').insert([{
+            date: shiftForm.value.date,
+            type: 'income',
+            category: shiftForm.value.source,
+            amount: calculatedEarnings.value,
+            memo: `給料算定 (${shiftForm.value.hours}h${shiftForm.value.minutes}m)`
+          }]);
+
+          alert('シフトを保存しました！');
+          fetchData();
+        };
+
+        // 収支保存
+        const saveTransaction = async () => {
+          await supabase.from('transactions').insert([txForm.value]);
+          alert('収支を保存しました！');
+          fetchData();
+        };
+
+        // 削除
+        const deleteShift = async (id) => {
+          if (confirm('削除しますか？')) {
+            await supabase.from('shifts').delete().eq('id', id);
+            fetchData();
+          }
+        };
+
+        const deleteTransaction = async (id) => {
+          if (confirm('削除しますか？')) {
+            await supabase.from('transactions').delete().eq('id', id);
+            fetchData();
+          }
+        };
+
+        const formatNum = (num) => (num || 0).toLocaleString();
+
+        onMounted(() => {
+          fetchData();
+          lucide.createIcons();
+        });
+
+        updated(() => {
+          lucide.createIcons();
+        });
+
+        return {
+          currentTab, currentYear, shiftForm, txForm, shifts, transactions,
+          sourceOptions, expenseCategories, incomeCategories,
+          calculatedEarnings, annualIncome, annualExpense, incomeBySource,
+          saveShift, saveTransaction, deleteShift, deleteTransaction, formatNum
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
